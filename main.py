@@ -1,7 +1,8 @@
+from datetime import date
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -51,11 +52,13 @@ class GastoEntrada(BaseModel):
     tipo: Literal["FIXO", "CARTAO"]
     descricao: str
     valor: Decimal = Field(ge=0)
+    data_gasto: date
 
 
 class GastoAtualizacao(BaseModel):
     descricao: str
     valor: Decimal = Field(ge=0)
+    data_gasto: date
 
 
 # =========================================================
@@ -182,10 +185,14 @@ def consultar_mes(
                 id,
                 tipo,
                 descricao,
-                valor
+                valor,
+                data_gasto
             FROM gastos
             WHERE controle_mensal_id = :controle_id
-            ORDER BY id;
+
+            ORDER BY
+                data_gasto NULLS LAST,
+                id;
         """)
 
         gastos = conexao.execute(
@@ -203,7 +210,8 @@ def consultar_mes(
         item = {
             "id": gasto["id"],
             "descricao": gasto["descricao"],
-            "valor": float(gasto["valor"])
+            "valor": float(gasto["valor"]),
+            "data_gasto": gasto["data_gasto"]
         }
 
         if gasto["tipo"] == "FIXO":
@@ -315,6 +323,16 @@ def adicionar_gasto(
             detail="A descrição não pode ficar vazia."
         )
 
+    # A data precisa pertencer ao mês selecionado
+    if (
+        dados.data_gasto.year != ano
+        or dados.data_gasto.month != mes
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="A data do gasto deve pertencer ao mês selecionado."
+        )
+
     with engine.begin() as conexao:
 
         controle = conexao.execute(
@@ -342,26 +360,30 @@ def adicionar_gasto(
                     controle_mensal_id,
                     tipo,
                     descricao,
-                    valor
+                    valor,
+                    data_gasto
                 )
                 VALUES (
                     :controle_id,
                     :tipo,
                     :descricao,
-                    :valor
+                    :valor,
+                    :data_gasto
                 )
 
                 RETURNING
                     id,
                     tipo,
                     descricao,
-                    valor;
+                    valor,
+                    data_gasto;
             """),
             {
                 "controle_id": controle["id"],
                 "tipo": dados.tipo,
                 "descricao": descricao,
-                "valor": dados.valor
+                "valor": dados.valor,
+                "data_gasto": dados.data_gasto
             }
         ).mappings().first()
 
@@ -371,7 +393,8 @@ def adicionar_gasto(
             "id": resultado["id"],
             "tipo": resultado["tipo"],
             "descricao": resultado["descricao"],
-            "valor": float(resultado["valor"])
+            "valor": float(resultado["valor"]),
+            "data_gasto": resultado["data_gasto"]
         }
     }
 
@@ -395,38 +418,69 @@ def atualizar_gasto(
             detail="A descrição não pode ficar vazia."
         )
 
-    query = text("""
-        UPDATE gastos
-
-        SET
-            descricao = :descricao,
-            valor = :valor
-
-        WHERE id = :gasto_id
-
-        RETURNING
-            id,
-            tipo,
-            descricao,
-            valor;
-    """)
-
     with engine.begin() as conexao:
 
-        resultado = conexao.execute(
-            query,
+        # Descobre a competência do gasto
+        gasto_atual = conexao.execute(
+            text("""
+                SELECT
+                    g.id,
+                    cm.competencia
+                FROM gastos g
+
+                INNER JOIN controle_mensal cm
+                    ON cm.id = g.controle_mensal_id
+
+                WHERE g.id = :gasto_id;
+            """),
             {
-                "gasto_id": gasto_id,
-                "descricao": descricao,
-                "valor": dados.valor
+                "gasto_id": gasto_id
             }
         ).mappings().first()
 
-    if resultado is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Gasto não encontrado."
-        )
+        if gasto_atual is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Gasto não encontrado."
+            )
+
+        competencia = gasto_atual["competencia"]
+
+        # Impede mover o gasto para outro mês
+        if (
+            dados.data_gasto.year != competencia.year
+            or dados.data_gasto.month != competencia.month
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="A data do gasto deve pertencer ao mês do lançamento."
+            )
+
+        resultado = conexao.execute(
+            text("""
+                UPDATE gastos
+
+                SET
+                    descricao = :descricao,
+                    valor = :valor,
+                    data_gasto = :data_gasto
+
+                WHERE id = :gasto_id
+
+                RETURNING
+                    id,
+                    tipo,
+                    descricao,
+                    valor,
+                    data_gasto;
+            """),
+            {
+                "gasto_id": gasto_id,
+                "descricao": descricao,
+                "valor": dados.valor,
+                "data_gasto": dados.data_gasto
+            }
+        ).mappings().first()
 
     return {
         "mensagem": "Gasto atualizado com sucesso.",
@@ -434,7 +488,8 @@ def atualizar_gasto(
             "id": resultado["id"],
             "tipo": resultado["tipo"],
             "descricao": resultado["descricao"],
-            "valor": float(resultado["valor"])
+            "valor": float(resultado["valor"]),
+            "data_gasto": resultado["data_gasto"]
         }
     }
 
