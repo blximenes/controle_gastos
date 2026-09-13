@@ -10,6 +10,7 @@ from fastapi.security import (
     HTTPAuthorizationCredentials,
     HTTPBearer
 )
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from database import engine
@@ -27,6 +28,9 @@ ALGORITHM = "HS256"
 
 security = HTTPBearer(auto_error=False)
 
+class LoginEntrada(BaseModel):
+    usuario: str
+    senha: str
 
 # =========================================================
 # BUSCAR USUÁRIO NO BANCO
