@@ -1,12 +1,19 @@
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine
+
+from auth import (
+    LoginEntrada,
+    autenticar_usuario,
+    criar_token,
+    exigir_autenticacao
+)
 
 
 # =========================================================
@@ -17,6 +24,11 @@ app = FastAPI(
     title="API Controle de Gastos",
     version="1.0.0"
 )
+
+
+# =========================================================
+# CORS
+# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,11 +70,39 @@ def inicio():
 
 
 # =========================================================
+# LOGIN
+# =========================================================
+
+@app.post("/login")
+def login(dados: LoginEntrada):
+
+    if not autenticar_usuario(
+        dados.usuario,
+        dados.senha
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Usuário ou senha inválidos."
+        )
+
+    token = criar_token(dados.usuario)
+
+    return {
+        "access_token": token,
+        "token_type": "bearer"
+    }
+
+
+# =========================================================
 # CONSULTAR UM MÊS
 # =========================================================
 
 @app.get("/mes/{ano}/{mes}")
-def consultar_mes(ano: int, mes: int):
+def consultar_mes(
+    ano: int,
+    mes: int,
+    _usuario: str = Depends(exigir_autenticacao)
+):
 
     if mes < 1 or mes > 12:
         raise HTTPException(
@@ -200,7 +240,8 @@ def consultar_mes(ano: int, mes: int):
 def atualizar_renda(
     ano: int,
     mes: int,
-    dados: RendaEntrada
+    dados: RendaEntrada,
+    _usuario: str = Depends(exigir_autenticacao)
 ):
 
     if mes < 1 or mes > 12:
@@ -256,7 +297,8 @@ def atualizar_renda(
 def adicionar_gasto(
     ano: int,
     mes: int,
-    dados: GastoEntrada
+    dados: GastoEntrada,
+    _usuario: str = Depends(exigir_autenticacao)
 ):
 
     if mes < 1 or mes > 12:
@@ -341,7 +383,8 @@ def adicionar_gasto(
 @app.put("/gastos/{gasto_id}")
 def atualizar_gasto(
     gasto_id: int,
-    dados: GastoAtualizacao
+    dados: GastoAtualizacao,
+    _usuario: str = Depends(exigir_autenticacao)
 ):
 
     descricao = dados.descricao.strip()
@@ -401,7 +444,10 @@ def atualizar_gasto(
 # =========================================================
 
 @app.delete("/gastos/{gasto_id}")
-def excluir_gasto(gasto_id: int):
+def excluir_gasto(
+    gasto_id: int,
+    _usuario: str = Depends(exigir_autenticacao)
+):
 
     query = text("""
         DELETE FROM gastos
