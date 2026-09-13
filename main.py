@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine
 
@@ -15,6 +16,14 @@ from database import engine
 app = FastAPI(
     title="API Controle de Gastos",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
