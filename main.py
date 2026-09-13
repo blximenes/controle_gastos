@@ -41,7 +41,7 @@ app.add_middleware(
 
 
 # =========================================================
-# MODELOS DE DADOS
+# MODELOS
 # =========================================================
 
 class RendaEntrada(BaseModel):
@@ -62,7 +62,7 @@ class GastoAtualizacao(BaseModel):
 
 
 # =========================================================
-# PÁGINA INICIAL
+# ROTA INICIAL
 # =========================================================
 
 @app.get("/")
@@ -97,14 +97,14 @@ def login(dados: LoginEntrada):
 
 
 # =========================================================
-# CONSULTAR UM MÊS
+# CONSULTAR MÊS
 # =========================================================
 
 @app.get("/mes/{ano}/{mes}")
 def consultar_mes(
     ano: int,
     mes: int,
-    _usuario: str = Depends(exigir_autenticacao)
+    usuario: dict = Depends(exigir_autenticacao)
 ):
 
     if mes < 1 or mes > 12:
@@ -112,6 +112,8 @@ def consultar_mes(
             status_code=400,
             detail="O mês deve estar entre 1 e 12."
         )
+
+    usuario_id = usuario["id"]
 
     query_resumo = text("""
         SELECT
@@ -156,7 +158,9 @@ def consultar_mes(
         LEFT JOIN gastos g
             ON g.controle_mensal_id = cm.id
 
-        WHERE cm.competencia = make_date(:ano, :mes, 1)
+        WHERE
+            cm.usuario_id = :usuario_id
+            AND cm.competencia = make_date(:ano, :mes, 1)
 
         GROUP BY
             cm.id,
@@ -169,6 +173,7 @@ def consultar_mes(
         resumo = conexao.execute(
             query_resumo,
             {
+                "usuario_id": usuario_id,
                 "ano": ano,
                 "mes": mes
             }
@@ -187,11 +192,13 @@ def consultar_mes(
                 descricao,
                 valor,
                 data_gasto
+
             FROM gastos
+
             WHERE controle_mensal_id = :controle_id
 
             ORDER BY
-                data_gasto NULLS LAST,
+                data_gasto,
                 id;
         """)
 
@@ -241,7 +248,7 @@ def consultar_mes(
 
 
 # =========================================================
-# CADASTRAR OU ALTERAR A RENDA DO MÊS
+# CADASTRAR OU ALTERAR RENDA
 # =========================================================
 
 @app.put("/mes/{ano}/{mes}/renda")
@@ -249,7 +256,7 @@ def atualizar_renda(
     ano: int,
     mes: int,
     dados: RendaEntrada,
-    _usuario: str = Depends(exigir_autenticacao)
+    usuario: dict = Depends(exigir_autenticacao)
 ):
 
     if mes < 1 or mes > 12:
@@ -258,17 +265,24 @@ def atualizar_renda(
             detail="O mês deve estar entre 1 e 12."
         )
 
+    usuario_id = usuario["id"]
+
     query = text("""
         INSERT INTO controle_mensal (
+            usuario_id,
             competencia,
             renda
         )
         VALUES (
+            :usuario_id,
             make_date(:ano, :mes, 1),
             :renda
         )
 
-        ON CONFLICT (competencia)
+        ON CONFLICT (
+            usuario_id,
+            competencia
+        )
 
         DO UPDATE SET
             renda = EXCLUDED.renda
@@ -284,6 +298,7 @@ def atualizar_renda(
         resultado = conexao.execute(
             query,
             {
+                "usuario_id": usuario_id,
                 "ano": ano,
                 "mes": mes,
                 "renda": dados.renda
@@ -306,7 +321,7 @@ def adicionar_gasto(
     ano: int,
     mes: int,
     dados: GastoEntrada,
-    _usuario: str = Depends(exigir_autenticacao)
+    usuario: dict = Depends(exigir_autenticacao)
 ):
 
     if mes < 1 or mes > 12:
@@ -314,6 +329,8 @@ def adicionar_gasto(
             status_code=400,
             detail="O mês deve estar entre 1 e 12."
         )
+
+    usuario_id = usuario["id"]
 
     descricao = dados.descricao.strip()
 
@@ -323,7 +340,6 @@ def adicionar_gasto(
             detail="A descrição não pode ficar vazia."
         )
 
-    # A data precisa pertencer ao mês selecionado
     if (
         dados.data_gasto.year != ano
         or dados.data_gasto.month != mes
@@ -338,11 +354,16 @@ def adicionar_gasto(
         controle = conexao.execute(
             text("""
                 SELECT id
+
                 FROM controle_mensal
-                WHERE competencia =
-                    make_date(:ano, :mes, 1);
+
+                WHERE
+                    usuario_id = :usuario_id
+                    AND competencia =
+                        make_date(:ano, :mes, 1);
             """),
             {
+                "usuario_id": usuario_id,
                 "ano": ano,
                 "mes": mes
             }
@@ -407,8 +428,10 @@ def adicionar_gasto(
 def atualizar_gasto(
     gasto_id: int,
     dados: GastoAtualizacao,
-    _usuario: str = Depends(exigir_autenticacao)
+    usuario: dict = Depends(exigir_autenticacao)
 ):
+
+    usuario_id = usuario["id"]
 
     descricao = dados.descricao.strip()
 
@@ -420,21 +443,26 @@ def atualizar_gasto(
 
     with engine.begin() as conexao:
 
-        # Descobre a competência do gasto
+        # Verifica se o gasto realmente pertence
+        # ao usuário que está autenticado
         gasto_atual = conexao.execute(
             text("""
                 SELECT
                     g.id,
                     cm.competencia
+
                 FROM gastos g
 
                 INNER JOIN controle_mensal cm
                     ON cm.id = g.controle_mensal_id
 
-                WHERE g.id = :gasto_id;
+                WHERE
+                    g.id = :gasto_id
+                    AND cm.usuario_id = :usuario_id;
             """),
             {
-                "gasto_id": gasto_id
+                "gasto_id": gasto_id,
+                "usuario_id": usuario_id
             }
         ).mappings().first()
 
@@ -446,7 +474,6 @@ def atualizar_gasto(
 
         competencia = gasto_atual["competencia"]
 
-        # Impede mover o gasto para outro mês
         if (
             dados.data_gasto.year != competencia.year
             or dados.data_gasto.month != competencia.month
@@ -501,13 +528,22 @@ def atualizar_gasto(
 @app.delete("/gastos/{gasto_id}")
 def excluir_gasto(
     gasto_id: int,
-    _usuario: str = Depends(exigir_autenticacao)
+    usuario: dict = Depends(exigir_autenticacao)
 ):
 
+    usuario_id = usuario["id"]
+
     query = text("""
-        DELETE FROM gastos
-        WHERE id = :gasto_id
-        RETURNING id;
+        DELETE FROM gastos g
+
+        USING controle_mensal cm
+
+        WHERE
+            g.controle_mensal_id = cm.id
+            AND g.id = :gasto_id
+            AND cm.usuario_id = :usuario_id
+
+        RETURNING g.id;
     """)
 
     with engine.begin() as conexao:
@@ -515,7 +551,8 @@ def excluir_gasto(
         resultado = conexao.execute(
             query,
             {
-                "gasto_id": gasto_id
+                "gasto_id": gasto_id,
+                "usuario_id": usuario_id
             }
         ).first()
 

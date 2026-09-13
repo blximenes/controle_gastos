@@ -3,45 +3,87 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import jwt
+
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBearer
+)
+from sqlalchemy import text
+
+from database import engine
 
 
 load_dotenv()
 
 
-APP_USERNAME = os.getenv("APP_USERNAME")
-APP_PASSWORD_HASH = os.getenv("APP_PASSWORD_HASH")
-JWT_SECRET = os.getenv("JWT_SECRET")
+# =========================================================
+# CONFIGURAÇÕES
+# =========================================================
 
+JWT_SECRET = os.getenv("JWT_SECRET")
 ALGORITHM = "HS256"
 
 security = HTTPBearer(auto_error=False)
 
 
-class LoginEntrada(BaseModel):
-    usuario: str
+# =========================================================
+# BUSCAR USUÁRIO NO BANCO
+# =========================================================
+
+def buscar_usuario(usuario: str):
+
+    query = text("""
+        SELECT
+            id,
+            usuario,
+            senha_hash,
+            ativo
+        FROM usuarios
+        WHERE usuario = :usuario;
+    """)
+
+    with engine.connect() as conexao:
+
+        resultado = conexao.execute(
+            query,
+            {
+                "usuario": usuario
+            }
+        ).mappings().first()
+
+    return resultado
+
+
+# =========================================================
+# AUTENTICAR USUÁRIO
+# =========================================================
+
+def autenticar_usuario(
+    usuario: str,
     senha: str
+):
 
+    usuario_banco = buscar_usuario(usuario)
 
-def autenticar_usuario(usuario: str, senha: str):
-
-    if not APP_USERNAME or not APP_PASSWORD_HASH:
-        raise HTTPException(
-            status_code=500,
-            detail="Autenticação não configurada."
-        )
-
-    if usuario != APP_USERNAME:
+    if usuario_banco is None:
         return False
 
-    return bcrypt.checkpw(
+    if not usuario_banco["ativo"]:
+        return False
+
+    senha_valida = bcrypt.checkpw(
         senha.encode("utf-8"),
-        APP_PASSWORD_HASH.encode("utf-8")
+        usuario_banco["senha_hash"].encode("utf-8")
     )
 
+    return senha_valida
+
+
+# =========================================================
+# CRIAR TOKEN JWT
+# =========================================================
 
 def criar_token(usuario: str):
 
@@ -51,10 +93,22 @@ def criar_token(usuario: str):
             detail="JWT não configurado."
         )
 
+    usuario_banco = buscar_usuario(usuario)
+
+    if (
+        usuario_banco is None
+        or not usuario_banco["ativo"]
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Usuário inválido."
+        )
+
     agora = datetime.now(timezone.utc)
 
     payload = {
-        "sub": usuario,
+        "sub": usuario_banco["usuario"],
+        "user_id": usuario_banco["id"],
         "iat": agora,
         "exp": agora + timedelta(hours=24)
     }
@@ -66,6 +120,10 @@ def criar_token(usuario: str):
     )
 
 
+# =========================================================
+# VALIDAR TOKEN
+# =========================================================
+
 def exigir_autenticacao(
     credenciais: HTTPAuthorizationCredentials = Depends(security)
 ):
@@ -74,6 +132,12 @@ def exigir_autenticacao(
         raise HTTPException(
             status_code=401,
             detail="Não autenticado."
+        )
+
+    if not JWT_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="JWT não configurado."
         )
 
     try:
@@ -85,14 +149,48 @@ def exigir_autenticacao(
         )
 
         usuario = payload.get("sub")
+        usuario_id = payload.get("user_id")
 
-        if usuario != APP_USERNAME:
+        if not usuario or not usuario_id:
             raise HTTPException(
                 status_code=401,
                 detail="Token inválido."
             )
 
-        return usuario
+        query = text("""
+            SELECT
+                id,
+                usuario,
+                ativo
+            FROM usuarios
+            WHERE
+                id = :usuario_id
+                AND usuario = :usuario;
+        """)
+
+        with engine.connect() as conexao:
+
+            usuario_banco = conexao.execute(
+                query,
+                {
+                    "usuario_id": usuario_id,
+                    "usuario": usuario
+                }
+            ).mappings().first()
+
+        if (
+            usuario_banco is None
+            or not usuario_banco["ativo"]
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="Usuário inválido ou inativo."
+            )
+
+        return {
+            "id": usuario_banco["id"],
+            "usuario": usuario_banco["usuario"]
+        }
 
     except jwt.ExpiredSignatureError:
 
