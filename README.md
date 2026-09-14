@@ -13,7 +13,7 @@ A aplicação possui um **Modo Demonstração** público, que permite testar as 
 > 🧪 Os dados utilizados no modo DEMO são fictícios e não são persistidos no banco de dados.
 
 🔗 **Aplicação:**  
-`COLE_AQUI_O_LINK_PUBLICADO_DO_LOVABLE`
+`(https://controlegastos-bx.lovable.app/)`
 
 No sistema, basta clicar em:
 
