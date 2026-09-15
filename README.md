@@ -73,6 +73,28 @@ Também possui suporte a múltiplos usuários, mantendo os dados financeiros de 
 
 ---
 
+## 📸 Visual do projeto
+
+### Esboço inicial
+
+A ideia do sistema começou a partir deste esboço:
+
+![Esboço inicial](imagens/esboco.png)
+
+### Tela de login
+
+![Tela de login](imagens/login.png)
+
+### Painel principal
+
+![Painel principal](imagens/demo1.png)
+
+### Modo demonstração
+
+![Modo demonstração](imagens/demo2.png)
+
+---
+
 ## 🏗️ Arquitetura
 
 ```mermaid
@@ -91,3 +113,4 @@ flowchart TD
     G[Modo DEMO] --> H[Estado local React<br/>Sem persistência]
 
     H -. não acessa .-> D
+
